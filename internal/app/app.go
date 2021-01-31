@@ -4,21 +4,20 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/common-go/config"
 	"github.com/common-go/health"
 	"github.com/common-go/kafka"
 	"github.com/common-go/log"
 	"github.com/common-go/mongo"
 	"github.com/common-go/mq"
 	v "github.com/common-go/validator"
+	"github.com/go-playground/validator/v10"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/go-playground/validator.v9"
 )
 
 type ApplicationContext struct {
-	Consumer       mq.Consumer
-	ConsumerCaller mq.ConsumerCaller
-	HealthHandler  *health.HealthHandler
+	Consumer        mq.Consumer
+	ConsumerHandler mq.ConsumerHandler
+	HealthHandler   *health.HealthHandler
 }
 
 func NewApp(ctx context.Context, root Root) (*ApplicationContext, error) {
@@ -35,30 +34,39 @@ func NewApp(ctx context.Context, root Root) (*ApplicationContext, error) {
 		logInfo = log.InfoMsg
 	}
 
-	consumer, er2 := kafka.NewConsumerByConfig(root.KafkaConsumer, true)
+	consumer, er2 := kafka.NewConsumerByConfig(root.Consumer.KafkaConsumer, true)
 	if er2 != nil {
 		log.Error(ctx, "Cannot create a new consumer: Error: "+er2.Error())
 		return nil, er2
 	}
-
 	userTypeOf := reflect.TypeOf(User{})
 	writer := mongo.NewMongoInserter(mongoDb, "users")
 	validator := mq.NewValidator(userTypeOf, NewUserValidator())
-	var consumerCaller mq.ConsumerCaller
-	if root.Retry == nil {
-		consumerCaller = mq.NewConsumerCaller(userTypeOf, writer, 3, nil, "", validator, nil, true, logError, logInfo)
-	} else {
-		retries := config.DurationsFromValue(root.Retry, "Retry", 9)
-		consumerCaller = mq.NewConsumerCallerWithRetries(userTypeOf, writer, validator, retries, nil, false, logError, logInfo)
-	}
+
 	mongoChecker := mongo.NewHealthChecker(mongoDb)
-	consumerChecker := kafka.NewKafkaHealthChecker(root.KafkaConsumer.Brokers)
-	checkers := []health.HealthChecker{mongoChecker, consumerChecker}
+	consumerChecker := kafka.NewKafkaHealthChecker(root.Consumer.KafkaConsumer.Brokers)
+	var checkers []health.HealthChecker
+	var consumerCaller mq.ConsumerHandler
+	if root.KafkaProducer != nil {
+		producer, er3 := kafka.NewProducerByConfig(*root.KafkaProducer)
+		if er3 != nil {
+			log.Error(ctx, "Cannot new a new producer. Error:"+er3.Error())
+			return nil, er3
+		}
+		retryService := mq.NewMqRetryService(producer, logError, logInfo)
+		consumerCaller = mq.NewConsumerHandlerByConfig(root.Consumer.Config, userTypeOf, writer, retryService, validator, nil, logError, logInfo)
+		producerChecker := kafka.NewKafkaHealthChecker(root.KafkaProducer.Brokers)
+		checkers = []health.HealthChecker{mongoChecker, consumerChecker, producerChecker}
+	} else {
+		checkers = []health.HealthChecker{mongoChecker, consumerChecker}
+		consumerCaller = mq.NewConsumerHandlerWithRetryConfig(userTypeOf, writer, validator, root.Retry, true, logError, logInfo)
+	}
+
 	handler := health.NewHealthHandler(checkers)
 	return &ApplicationContext{
-		Consumer:       consumer,
-		ConsumerCaller: consumerCaller,
-		HealthHandler:  handler,
+		Consumer:        consumer,
+		ConsumerHandler: consumerCaller,
+		HealthHandler:   handler,
 	}, nil
 }
 
