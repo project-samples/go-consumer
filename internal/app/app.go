@@ -6,12 +6,12 @@ import (
 
 	"github.com/common-go/health"
 	"github.com/common-go/kafka"
-	"github.com/common-go/log"
 	"github.com/common-go/mongo"
 	"github.com/common-go/mq"
 	v "github.com/common-go/validator"
+	"github.com/common-go/zap"
 	"github.com/go-playground/validator/v10"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap/zapcore"
 )
 
 type ApplicationContext struct {
@@ -21,7 +21,10 @@ type ApplicationContext struct {
 }
 
 func NewApp(ctx context.Context, root Root) (*ApplicationContext, error) {
-	log.Initialize(root.Log)
+	logger, er0 := log.Initialize(root.Log)
+	if er0 != nil {
+		return nil, er0
+	}
 	mongoDb, er1 := mongo.SetupMongo(ctx, root.Mongo)
 	if er1 != nil {
 		log.Error(ctx, "Cannot connect to MongoDB: Error: "+er1.Error())
@@ -30,7 +33,7 @@ func NewApp(ctx context.Context, root Root) (*ApplicationContext, error) {
 
 	logError := log.ErrorMsg
 	var logInfo func(context.Context, string)
-	if logrus.IsLevelEnabled(logrus.InfoLevel) {
+	if logger.Core().Enabled(zapcore.InfoLevel) {
 		logInfo = log.InfoMsg
 	}
 

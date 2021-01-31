@@ -3,9 +3,9 @@ package app
 import (
 	"github.com/common-go/health"
 	"github.com/common-go/kafka"
-	"github.com/common-go/log"
 	"github.com/common-go/mongo"
 	"github.com/common-go/mq"
+	"github.com/common-go/zap"
 )
 
 type Root struct {
